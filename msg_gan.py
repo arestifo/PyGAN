@@ -6,24 +6,25 @@ import os
 from tensorflow.keras.models import Model
 from tensorflow.keras import optimizers
 
-import gan_layers
+import gan_layers as gl
 import gan_util as util
 import gan_params as gp
 
 tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], True)
+# tf.config.experimental_run_functions_eagerly(True)
 
 
 # Uses reference code from
 # https://github.com/eriklindernoren/Keras-GAN/blob/master/wgan_gp/wgan_gp.py
 class MsgGan:
-    def __init__(self, target_res):
-        assert np.ceil(np.log2(target_res)) == np.floor(np.log2(target_res)), 'Target resolution must be a power of 2'
-        self.target_res = int(np.log2(target_res / 2))
+    def __init__(self):
+        assert np.ceil(np.log2(gp.target_res)) == \
+               np.floor(np.log2(gp.target_res)), 'Target resolution must be a power of 2'
 
-        self.gen_opt = optimizers.Adam(learning_rate=gp.learning_rate, beta_1=gp.beta_1,
-                                       beta_2=gp.beta_2, epsilon=gp.eps)
-        self.crt_opt = optimizers.Adam(learning_rate=gp.learning_rate, beta_1=gp.beta_1,
-                                       beta_2=gp.beta_2, epsilon=gp.eps)
+        self.target_res = int(np.log2(gp.target_res / 2))
+
+        self.gen_opt = optimizers.Adam(learning_rate=gp.learning_rate, beta_1=gp.beta_1, beta_2=gp.beta_2)
+        self.crt_opt = optimizers.Adam(learning_rate=gp.learning_rate, beta_1=gp.beta_1, beta_2=gp.beta_2)
 
         if gp.use_mixed_precision:
             self.gen_opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(self.gen_opt)
@@ -90,8 +91,11 @@ class MsgGan:
                     # Get a new batch of real images and create new generate input
                     real_batch = dataset.next()
                     latent_input = util.generate_latents()
-
                     critic_loss = self.train_critic(real_batch, latent_input)
+
+                    # Resample input for generator training
+                    real_batch = dataset.next()
+                    latent_input = util.generate_latents()
                     generator_loss = self.train_generator(real_batch, latent_input)
 
                     epoch_seen += gp.batch_size
@@ -150,26 +154,29 @@ class MsgGan:
     def build_generator(self):
         # Keep track of multi-scale generator outputs to feed to critic
         outputs = []
-        input_layer = gan_layers.input_layer(shape=(gp.latent_dim,))
+        input_layer = gl.input_layer(shape=(gp.latent_dim,))
 
         # Input block
-        gen = gan_layers.reshape(input_layer, shape=(1, 1, gp.latent_dim))
-        gen = gan_layers.conv2d_transpose(gen, util.nf(0), kernel=4, padding='latent', normalize=None)
-        gen = gan_layers.leaky_relu(gen)
+        # gen = gl.dense(input_layer, 4 * 4 * util.nf(0))
+        # gen = gl.leaky_relu(gen)
+        # gen = gl.reshape(gen, shape=(4, 4, util.nf(0)))
 
-        gen = gan_layers.conv2d(gen, util.nf(0), kernel=3)
-        gen = gan_layers.leaky_relu(gen)
-        outputs.append(gan_layers.ms_output_layer(gen, normalize=None))
+        gen = gl.conv2d_transpose(input_layer, util.nf(0), kernel=4, padding='latent')
+        gen = gl.leaky_relu(gen)
+
+        gen = gl.conv2d(gen, util.nf(0), kernel=3)
+        gen = gl.leaky_relu(gen)
+        outputs.append(gl.ms_output_layer(gen))
 
         # Add the hidden generator blocks
         for block_res in range(self.target_res - 1):
-            gen = gan_layers.nearest_neighbor(gen)
-            gen = gan_layers.conv2d(gen, util.nf(block_res + 1), kernel=3)
-            gen = gan_layers.leaky_relu(gen)
+            gen = gl.nearest_neighbor(gen)
+            gen = gl.conv2d(gen, util.nf(block_res + 1), kernel=3)
+            gen = gl.leaky_relu(gen)
 
-            gen = gan_layers.conv2d(gen, util.nf(block_res + 1), kernel=3)
-            gen = gan_layers.leaky_relu(gen)
-            outputs.append(gan_layers.ms_output_layer(gen, normalize=None))
+            gen = gl.conv2d(gen, util.nf(block_res + 1), kernel=3)
+            gen = gl.leaky_relu(gen)
+            outputs.append(gl.ms_output_layer(gen))
 
         # Return finalized model TODO: Compile
         outputs = list(reversed(outputs))  # so that generator outputs and critic inputs are aligned
@@ -181,54 +188,53 @@ class MsgGan:
         exp_res = util.log_to_res(self.target_res)
 
         # Input layer (no concatenate in input layer)
-        inputs.append(gan_layers.input_layer(shape=(exp_res, exp_res, 3)))
-        crt = gan_layers.conv2d(inputs[-1], util.nf(self.target_res - 1), kernel=1, normalize=None)
+        inputs.append(gl.input_layer(shape=(exp_res, exp_res, 3)))
+        crt = gl.conv2d(inputs[-1], util.nf(self.target_res - 1), kernel=1)
         if gp.mbstd_in_each_layer:
-            crt = gan_layers.minibatch_std(crt)
+            crt = gl.minibatch_std(crt)
 
-        crt = gan_layers.conv2d(crt, util.nf(self.target_res - 1), kernel=3, normalize=None)
-        crt = gan_layers.leaky_relu(crt)
+        crt = gl.conv2d(crt, util.nf(self.target_res - 1), kernel=3)
+        crt = gl.leaky_relu(crt)
 
-        crt = gan_layers.conv2d(crt, util.nf(self.target_res - 2), kernel=3, normalize=None)
-        crt = gan_layers.leaky_relu(crt)
-        crt = gan_layers.avg_pool(crt)
+        crt = gl.conv2d(crt, util.nf(self.target_res - 2), kernel=3)
+        crt = gl.leaky_relu(crt)
+        crt = gl.avg_pool(crt)
 
         # Intermediate layers
         for res in range(self.target_res - 1, 1, -1):
             exp_res = util.log_to_res(res)
-            inputs.append(gan_layers.input_layer(shape=(exp_res, exp_res, 3)))
+            inputs.append(gl.input_layer(shape=(exp_res, exp_res, 3)))
 
             # Multi-scale critic input
-            crt = gan_layers.ms_input_layer(crt, inputs[-1], features=util.nf(res - 1), normalize=None)
+            crt = gl.ms_input_layer(crt, inputs[-1], features=util.nf(res - 1))
             if gp.mbstd_in_each_layer:
-                crt = gan_layers.minibatch_std(crt)
-            crt = gan_layers.conv2d(crt, util.nf(res - 1), kernel=3, normalize=None)
-            crt = gan_layers.leaky_relu(crt)
+                crt = gl.minibatch_std(crt)
+            crt = gl.conv2d(crt, util.nf(res - 1), kernel=3)
+            crt = gl.leaky_relu(crt)
 
-            crt = gan_layers.conv2d(crt, util.nf(res - 2), kernel=3, normalize=None)
-            crt = gan_layers.leaky_relu(crt)
-            crt = gan_layers.avg_pool(crt)
+            crt = gl.conv2d(crt, util.nf(res - 2), kernel=3)
+            crt = gl.leaky_relu(crt)
+            crt = gl.avg_pool(crt)
 
         # Output layer
-        inputs.append(gan_layers.input_layer(shape=(4, 4, 3)))
-        crt = gan_layers.ms_input_layer(crt, inputs[-1], features=util.nf(0), normalize=None)
-        crt = gan_layers.minibatch_std(crt)
+        inputs.append(gl.input_layer(shape=(4, 4, 3)))
+        crt = gl.ms_input_layer(crt, inputs[-1], features=util.nf(0))
+        crt = gl.minibatch_std(crt)
 
-        crt = gan_layers.conv2d(crt, util.nf(0), kernel=3, normalize=None)
-        crt = gan_layers.leaky_relu(crt)
+        crt = gl.conv2d(crt, util.nf(0), kernel=3)
+        crt = gl.leaky_relu(crt)
 
-        crt = gan_layers.conv2d(crt, util.nf(0), kernel=4, normalize=None)
-        crt = gan_layers.leaky_relu(crt)
+        crt = gl.conv2d(crt, util.nf(0), kernel=4)
+        crt = gl.leaky_relu(crt)
 
-        crt = gan_layers.flatten(crt)
-        crt = gan_layers.dense(crt, 1, dtype='float32')
+        crt = gl.flatten(crt)
+        crt = gl.dense(crt, 1, dtype='float32')
 
         # Finalized model
         return Model(inputs=inputs, outputs=crt)
 
 
-test_res = 64
-msg = MsgGan(target_res=test_res)
+msg = MsgGan()
 util.pm(msg.generator, 'g' + str(msg.generator.output_shape[0][1]))
 util.pm(msg.critic, 'c' + str(msg.critic.input_shape[0][1]))
-msg.train()
+# msg.train()
