@@ -10,8 +10,8 @@ import gan_layers as gl
 import gan_util as util
 import gan_params as gp
 
-tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], True)
-# tf.config.experimental_run_functions_eagerly(True)
+tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], gp.gpu_grow_memory)
+tf.config.experimental_run_functions_eagerly(gp.run_functions_eagerly)
 
 
 # Uses reference code from
@@ -57,7 +57,7 @@ class MsgGan:
         ]
 
     def random_image(self):
-        r_img = self.generator(self.seed, training=False)
+        r_img = self.generator(self.seed)
         self.view_imgs(r_img)
 
     def write_model_summaries(self):
@@ -66,7 +66,7 @@ class MsgGan:
             tf.summary.text('critic', self.critic.to_json(), step=0)
 
     # view multi-scale generator output
-    def view_imgs(self, imgs):
+    def view_imgs(self, imgs, show=False):
         # Get first image in batch
         imgs = [img[0] for img in imgs]
         fig, axs = plt.subplots(ncols=self.target_res)
@@ -77,11 +77,13 @@ class MsgGan:
             axs[subplot].axis('off')
             axs[subplot].imshow(img)
         plt.savefig(os.path.join(self.imgs_dir, str(self.total_seen) + '.png'))
+        if show:
+            plt.show()
         plt.cla()
         plt.close(fig)
 
     def train(self):
-        epochs = 5
+        epochs = 10
 
         dataset = util.load_celeba(self.target_res)
         for epoch in range(epochs):
@@ -114,41 +116,46 @@ class MsgGan:
                     if util.time_for_img(epoch_seen):
                         self.random_image()
 
+                # Save model weights after each epoch
+
     # Hypothesis: getting the grads of the MEAN hinge loss loses batch data and destabilizes the training process
     # Relativistic Hinge loss (RaHinge)
     # See SAGAN paper: https://arxiv.org/pdf/1805.08318.pdf
     @tf.function
     def train_generator(self, real_batch, latent_input):
         with tf.GradientTape() as gen_tape:
-            fake_batch = self.generator(latent_input, training=True)
+            fake_batch = self.generator(latent_input)
+            real_preds = self.critic(real_batch)
+            fake_preds = self.critic(fake_batch)
 
-            real_fake_diff = self.critic(real_batch, training=True) - tf.reduce_mean(self.critic(fake_batch, training=True))
-            fake_real_diff = self.critic(fake_batch, training=True) - tf.reduce_mean(self.critic(real_batch, training=True))
+            real_fake_diff = real_preds - tf.reduce_mean(fake_preds)
+            fake_real_diff = fake_preds - tf.reduce_mean(real_preds)
 
             loss = tf.reduce_mean(tf.nn.relu(1 + real_fake_diff)) + tf.reduce_mean(tf.nn.relu(1 - fake_real_diff))
             scaled_loss = self.gen_opt.get_scaled_loss(loss)
 
-        gen_vars = self.generator.trainable_variables
-        scaled_gen_grads = gen_tape.gradient(scaled_loss, gen_vars)
+        scaled_gen_grads = gen_tape.gradient(scaled_loss, self.generator.trainable_variables)
         gen_grads = self.gen_opt.get_unscaled_gradients(scaled_gen_grads)
-        self.gen_opt.apply_gradients(zip(gen_grads, gen_vars))
+
+        self.gen_opt.apply_gradients(zip(gen_grads, self.generator.trainable_variables))
         return loss
 
     @tf.function
     def train_critic(self, real_batch, latent_input):
         with tf.GradientTape() as crt_tape:
-            fake_batch = self.generator(latent_input, training=True)
+            fake_batch = self.generator(latent_input)
+            real_preds = self.critic(real_batch)
+            fake_preds = self.critic(fake_batch)
 
-            real_fake_diff = self.critic(real_batch, training=True) - tf.reduce_mean(self.critic(fake_batch, training=True))
-            fake_real_diff = self.critic(fake_batch, training=True) - tf.reduce_mean(self.critic(real_batch, training=True))
+            real_fake_diff = real_preds - tf.reduce_mean(fake_preds)
+            fake_real_diff = fake_preds - tf.reduce_mean(real_preds)
 
             loss = tf.reduce_mean(tf.nn.relu(1 - real_fake_diff)) + tf.reduce_mean(tf.nn.relu(1 + fake_real_diff))
             scaled_loss = self.crt_opt.get_scaled_loss(loss)
 
-        crt_vars = self.critic.trainable_variables
-        scaled_crt_grads = crt_tape.gradient(scaled_loss, crt_vars)
+        scaled_crt_grads = crt_tape.gradient(scaled_loss, self.critic.trainable_variables)
         crt_grads = self.crt_opt.get_unscaled_gradients(scaled_crt_grads)
-        self.crt_opt.apply_gradients(zip(crt_grads, crt_vars))
+        self.crt_opt.apply_gradients(zip(crt_grads, self.critic.trainable_variables))
         return loss
 
     def build_generator(self):
@@ -157,15 +164,12 @@ class MsgGan:
         input_layer = gl.input_layer(shape=(gp.latent_dim,))
 
         # Input block
-        # gen = gl.dense(input_layer, 4 * 4 * util.nf(0))
-        # gen = gl.leaky_relu(gen)
-        # gen = gl.reshape(gen, shape=(4, 4, util.nf(0)))
-
         gen = gl.conv2d_transpose(input_layer, util.nf(0), kernel=4, padding='latent')
         gen = gl.leaky_relu(gen)
 
         gen = gl.conv2d(gen, util.nf(0), kernel=3)
         gen = gl.leaky_relu(gen)
+        gen = gl.normalize(gen, 'pixel')
         outputs.append(gl.ms_output_layer(gen))
 
         # Add the hidden generator blocks
@@ -173,9 +177,11 @@ class MsgGan:
             gen = gl.nearest_neighbor(gen)
             gen = gl.conv2d(gen, util.nf(block_res + 1), kernel=3)
             gen = gl.leaky_relu(gen)
+            gen = gl.normalize(gen, 'pixel')
 
             gen = gl.conv2d(gen, util.nf(block_res + 1), kernel=3)
             gen = gl.leaky_relu(gen)
+            gen = gl.normalize(gen, 'pixel')
             outputs.append(gl.ms_output_layer(gen))
 
         # Return finalized model TODO: Compile

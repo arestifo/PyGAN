@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras.layers import Layer, Conv2D, Conv2DTranspose, Dense, Input, LeakyReLU, Flatten, Reshape
 from tensorflow.keras.layers import AveragePooling2D, UpSampling2D, Concatenate, ZeroPadding2D
-from tensorflow.keras.layers import BatchNormalization, LayerNormalization
+from tensorflow.keras.layers import BatchNormalization, LayerNormalization, Wrapper
 from tensorflow.keras.initializers import RandomNormal, he_normal
 import gan_params as gp
 
@@ -15,7 +15,7 @@ class MinibatchStd(Layer):
         super(MinibatchStd, self).__init__(**kwargs)
 
     # perform the operation
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         # calculate the mean value for each pixel across channels
         mean = tf.reduce_mean(inputs, axis=0, keepdims=True)
         # calculate the squared differences between pixel values and mean
@@ -50,9 +50,6 @@ class PixelNorm(Layer):
     def __init__(self, **kwargs):
         super(PixelNorm, self).__init__(**kwargs)
 
-    def build(self, input_shape):
-        super(PixelNorm, self).build(input_shape)
-
     def call(self, inputs, **kwargs):
         inputs *= tf.math.rsqrt(tf.reduce_mean(tf.square(inputs), axis=-1, keepdims=True) + gp.pn_epsilon)
         return inputs
@@ -61,25 +58,40 @@ class PixelNorm(Layer):
         return input_shape
 
 
+# Equalized learning rate, as proposed in Karras et al 2017 (Progressive Growing of GANs)
+class ELR(Wrapper):
+    def __init__(self, layer, **kwargs):
+        super(ELR, self).__init__(layer, **kwargs)
+
+        # ELR normalizes weights by scaling them by the He constant h_c during every forward pass.
+        # Therefore the layer must have the `kernel` (weights) attribute
+        # h_c: gain / sqrt(kernel_size * kernel_size * num_channels_in), gain is usually sqrt(2)
+        if not hasattr(layer, 'kernel'):
+            raise ValueError('ELR must wrap a `Layer` with weights')
+
+
 def minibatch_std(in_layer):
     return MinibatchStd()(in_layer)
 
 
 # Using SpectralNorm on ALL (inc 1x1, 3x3, 4x4) layers doesn't seem to work
-def conv2d(in_layer, features, kernel, stride=(1, 1), constraint=None, init=he_normal(), **kwargs):
+def conv2d(in_layer, features, kernel, stride=(1, 1), spectral=False, elr=False,
+           constraint=None, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
     if 'padding' in kwargs:
-        if kwargs.pop('padding') == 'latent':
+        if kwargs['padding'] == 'latent':
+            # scale up from 1x1xlatent_dim to 4x4xlatent_dim by padding with zeros
+            in_layer = reshape(in_layer, shape=(1, 1, gp.latent_dim))
             in_layer = ZeroPadding2D(padding=((0, 3), (3, 0)))(in_layer)
     conv = Conv2D(features, (kernel, kernel), strides=stride, padding='same',
                   kernel_constraint=constraint, kernel_initializer=init, **kwargs)
 
-    # MSG-GAN: Apply spectral normalization to all 3x3 convolutions
-    if kernel == 3:
+    if spectral:
         conv = SpectralNorm(conv)
     return conv(in_layer)
 
 
-def conv2d_transpose(in_layer, features, kernel, stride=(1, 1), constraint=None, init=he_normal(), **kwargs):
+def conv2d_transpose(in_layer, features, kernel, stride=(1, 1), spectral=False, elr=False,
+                     constraint=None, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
     if 'padding' in kwargs:
         if kwargs.pop('padding') == 'latent':
             # scale up from 1x1xlatent_dim to 4x4xlatent_dim by padding with zeros
@@ -87,13 +99,13 @@ def conv2d_transpose(in_layer, features, kernel, stride=(1, 1), constraint=None,
             in_layer = ZeroPadding2D(padding=((0, 3), (3, 0)))(in_layer)
     conv_t = Conv2DTranspose(features, (kernel, kernel), strides=stride, padding='same',
                              kernel_constraint=constraint, kernel_initializer=init, **kwargs)
-    # MSG-GAN: Apply spectral normalization to all 3x3 convolutions
-    if kernel == 3:
+    if spectral:
         conv_t = SpectralNorm(conv_t)
     return conv_t(in_layer)
 
 
-def dense(in_layer, features, spectral=False, constraint=None, init=he_normal(), **kwargs):
+def dense(in_layer, features, spectral=False, elr=False,
+          constraint=None, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
     dense_ = Dense(features, kernel_constraint=constraint, kernel_initializer=init, **kwargs)
 
     return SpectralNorm(dense_)(in_layer) if spectral else dense_(in_layer)
