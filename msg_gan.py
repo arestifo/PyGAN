@@ -83,7 +83,7 @@ class MsgGan:
         plt.close(fig)
 
     def train(self):
-        epochs = 10
+        epochs = 5
 
         dataset = util.load_celeba(self.target_res)
         for epoch in range(epochs):
@@ -96,8 +96,8 @@ class MsgGan:
                     critic_loss = self.train_critic(real_batch, latent_input)
 
                     # Resample input for generator training
-                    real_batch = dataset.next()
-                    latent_input = util.generate_latents()
+                    # real_batch = dataset.next()
+                    # latent_input = util.generate_latents()
                     generator_loss = self.train_generator(real_batch, latent_input)
 
                     epoch_seen += gp.batch_size
@@ -169,20 +169,20 @@ class MsgGan:
 
         gen = gl.conv2d(gen, util.nf(0), kernel=3)
         gen = gl.leaky_relu(gen)
-        gen = gl.normalize(gen, 'pixel')
-        outputs.append(gl.ms_output_layer(gen))
+        gen = gl.normalize(gen, method='pixel_norm')
+        outputs.append(gl.to_rgb(gen))
 
         # Add the hidden generator blocks
         for block_res in range(self.target_res - 1):
             gen = gl.nearest_neighbor(gen)
             gen = gl.conv2d(gen, util.nf(block_res + 1), kernel=3)
             gen = gl.leaky_relu(gen)
-            gen = gl.normalize(gen, 'pixel')
+            gen = gl.normalize(gen, method='pixel_norm')
 
             gen = gl.conv2d(gen, util.nf(block_res + 1), kernel=3)
             gen = gl.leaky_relu(gen)
-            gen = gl.normalize(gen, 'pixel')
-            outputs.append(gl.ms_output_layer(gen))
+            gen = gl.normalize(gen, method='pixel_norm')
+            outputs.append(gl.to_rgb(gen))
 
         # Return finalized model TODO: Compile
         outputs = list(reversed(outputs))  # so that generator outputs and critic inputs are aligned
@@ -212,7 +212,7 @@ class MsgGan:
             inputs.append(gl.input_layer(shape=(exp_res, exp_res, 3)))
 
             # Multi-scale critic input
-            crt = gl.ms_input_layer(crt, inputs[-1], features=util.nf(res - 1))
+            crt = gl.combine(crt, inputs[-1], features=util.nf(res - 1))
             if gp.mbstd_in_each_layer:
                 crt = gl.minibatch_std(crt)
             crt = gl.conv2d(crt, util.nf(res - 1), kernel=3)
@@ -224,7 +224,7 @@ class MsgGan:
 
         # Output layer
         inputs.append(gl.input_layer(shape=(4, 4, 3)))
-        crt = gl.ms_input_layer(crt, inputs[-1], features=util.nf(0))
+        crt = gl.combine(crt, inputs[-1], features=util.nf(0))
         crt = gl.minibatch_std(crt)
 
         crt = gl.conv2d(crt, util.nf(0), kernel=3)
@@ -243,4 +243,4 @@ class MsgGan:
 msg = MsgGan()
 util.pm(msg.generator, 'g' + str(msg.generator.output_shape[0][1]))
 util.pm(msg.critic, 'c' + str(msg.critic.input_shape[0][1]))
-# msg.train()
+msg.train()

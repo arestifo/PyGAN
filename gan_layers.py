@@ -1,11 +1,11 @@
 import tensorflow as tf
+import numpy as np
 from tensorflow.keras.layers import Layer, Conv2D, Conv2DTranspose, Dense, Input, LeakyReLU, Flatten, Reshape
 from tensorflow.keras.layers import AveragePooling2D, UpSampling2D, Concatenate, ZeroPadding2D
 from tensorflow.keras.layers import BatchNormalization, LayerNormalization, Wrapper
 from tensorflow.keras.initializers import RandomNormal, he_normal
+from tensorflow.keras import backend as k
 import gan_params as gp
-
-from SpectralNormalizationKeras import SpectralNorm
 
 
 # based on code from https://tinyurl.com/yctmhav7 (Jason Brownlee, Machine Learning Mastery)
@@ -59,15 +59,50 @@ class PixelNorm(Layer):
 
 
 # Equalized learning rate, as proposed in Karras et al 2017 (Progressive Growing of GANs)
-class ELR(Wrapper):
-    def __init__(self, layer, **kwargs):
-        super(ELR, self).__init__(layer, **kwargs)
+# ELR and AddBiasLayer from https://github.com/MSC-BUAA/Keras-progressive_growing_of_gans
+class EqualizedLearningRate(Layer):
+    def __init__(self, in_layer, **kwargs):
+        self.in_layer = in_layer
+        super(EqualizedLearningRate, self).__init__(**kwargs)
 
-        # ELR normalizes weights by scaling them by the He constant h_c during every forward pass.
-        # Therefore the layer must have the `kernel` (weights) attribute
-        # h_c: gain / sqrt(kernel_size * kernel_size * num_channels_in), gain is usually sqrt(2)
-        if not hasattr(layer, 'kernel'):
-            raise ValueError('ELR must wrap a `Layer` with weights')
+    def build(self, input_shape):
+        weights = k.get_value(self.in_layer.kernel)
+        scale = np.sqrt(np.mean(weights ** 2))
+        k.set_value(self.in_layer.kernel, weights / scale)
+
+        self.scale = self.add_weight(name='scale', shape=scale.shape, trainable=False, initializer='zeros')
+        k.set_value(self.scale, scale)
+        super(EqualizedLearningRate, self).build(input_shape)
+
+    def call(self, inputs, **kwargs):
+        return inputs * self.scale
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        return {'wrapped_layer': self.in_layer}
+
+
+class AddBias(Layer):
+    def __init__(self, **kwargs):
+        super(AddBias, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        self.bias = self.add_weight(name='bias',
+                                    shape=(input_shape[-1],),
+                                    initializer='zeros',
+                                    trainable=True)
+        super(AddBias, self).build(input_shape)
+
+    def call(self, input, **kwargs):
+        if self.bias is not None:
+            input = k.bias_add(input, self.bias)
+        return input
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
 
 
 def minibatch_std(in_layer):
@@ -75,40 +110,58 @@ def minibatch_std(in_layer):
 
 
 # Using SpectralNorm on ALL (inc 1x1, 3x3, 4x4) layers doesn't seem to work
-def conv2d(in_layer, features, kernel, stride=(1, 1), spectral=False, elr=False,
-           constraint=None, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
+def conv2d(in_layer, features, kernel, stride=(1, 1), elr=gp.use_elr,
+           init=RandomNormal(stddev=gp.init_stddev), **kwargs):
     if 'padding' in kwargs:
         if kwargs['padding'] == 'latent':
             # scale up from 1x1xlatent_dim to 4x4xlatent_dim by padding with zeros
             in_layer = reshape(in_layer, shape=(1, 1, gp.latent_dim))
             in_layer = ZeroPadding2D(padding=((0, 3), (3, 0)))(in_layer)
-    conv = Conv2D(features, (kernel, kernel), strides=stride, padding='same',
-                  kernel_constraint=constraint, kernel_initializer=init, **kwargs)
 
-    if spectral:
-        conv = SpectralNorm(conv)
-    return conv(in_layer)
+    if elr:
+        conv = Conv2D(features, (kernel, kernel), strides=stride, padding='same',
+                      kernel_initializer=init, use_bias=False, **kwargs)
+    else:
+        conv = Conv2D(features, (kernel, kernel), strides=stride, padding='same', kernel_initializer=init, **kwargs)
+
+    in_layer = conv(in_layer)
+    if elr:
+        in_layer = EqualizedLearningRate(conv)(in_layer)
+        in_layer = AddBias()(in_layer)
+    return in_layer
 
 
-def conv2d_transpose(in_layer, features, kernel, stride=(1, 1), spectral=False, elr=False,
-                     constraint=None, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
+def conv2d_transpose(in_layer, features, kernel, stride=(1, 1), elr=gp.use_elr,
+                     init=RandomNormal(stddev=gp.init_stddev), **kwargs):
     if 'padding' in kwargs:
         if kwargs.pop('padding') == 'latent':
-            # scale up from 1x1xlatent_dim to 4x4xlatent_dim by padding with zeros
+            # scale up from [1,1,latent_dim] to [4,4,latent_dim] by padding with zeros
             in_layer = reshape(in_layer, shape=(1, 1, gp.latent_dim))
             in_layer = ZeroPadding2D(padding=((0, 3), (3, 0)))(in_layer)
-    conv_t = Conv2DTranspose(features, (kernel, kernel), strides=stride, padding='same',
-                             kernel_constraint=constraint, kernel_initializer=init, **kwargs)
-    if spectral:
-        conv_t = SpectralNorm(conv_t)
-    return conv_t(in_layer)
+
+    if elr:
+        conv_t = Conv2DTranspose(features, (kernel, kernel), strides=stride, padding='same',
+                                 kernel_initializer=init, use_bias=False, **kwargs)
+    else:
+        conv_t = Conv2DTranspose(features, (kernel, kernel), strides=stride, padding='same',
+                                 kernel_initializer=init, **kwargs)
+    in_layer = conv_t(in_layer)
+    if elr:
+        in_layer = EqualizedLearningRate(conv_t)(in_layer)
+        in_layer = AddBias()(in_layer)
+    return in_layer
 
 
-def dense(in_layer, features, spectral=False, elr=False,
-          constraint=None, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
-    dense_ = Dense(features, kernel_constraint=constraint, kernel_initializer=init, **kwargs)
+def dense(in_layer, features, elr=gp.use_elr, init=RandomNormal(stddev=gp.init_stddev), **kwargs):
+    if elr:
+        dense_ = Dense(features, kernel_initializer=init, use_bias=False, **kwargs)
+        in_layer = dense_(in_layer)
+        in_layer = EqualizedLearningRate(dense_)(in_layer)
+        in_layer = AddBias()(in_layer)
+    else:
+        in_layer = Dense(features, kernel_initializer=init, **kwargs)(in_layer)
 
-    return SpectralNorm(dense_)(in_layer) if spectral else dense_(in_layer)
+    return in_layer
 
 
 def leaky_relu(in_layer):
@@ -124,11 +177,11 @@ def input_layer(shape):
 
 
 def normalize(in_layer, method):
-    if method == 'pixel':
+    if method == 'pixel_norm':
         return PixelNorm()(in_layer)
-    elif method == 'bn':
+    elif method == 'batch_norm':
         return BatchNormalization()(in_layer)
-    elif method == 'ln':
+    elif method == 'layer_norm':
         return LayerNormalization()(in_layer)
     raise ValueError('Invalid normalization method')
 
@@ -146,7 +199,7 @@ def reshape(in_layer, shape):
 
 
 # intermediate to-RGB generator block
-def ms_output_layer(in_layer, **kwargs):
+def to_rgb(in_layer, **kwargs):
     return conv2d(in_layer, 3, kernel=1, dtype='float32', **kwargs)
 
 
@@ -154,7 +207,7 @@ def ms_output_layer(in_layer, **kwargs):
 # concats previous critic layer activations (R x R x N_Features(R+1)) with either:
 # - a randomly generated image (R x R x 3)
 # - a downsampled real image (R x R x 3)
-def ms_input_layer(prev_layer, image_input, features=None, **kwargs):
+def combine(prev_layer, image_input, features=None, **kwargs):
     # channel-wise concatenation
     if gp.concat_method == 'simple':
         return Concatenate(axis=-1)([image_input, prev_layer])

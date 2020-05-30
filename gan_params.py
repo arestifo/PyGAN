@@ -6,7 +6,7 @@ import datetime
 target_res = 128
 
 # Adam parameters
-learning_rate = 0.0001
+learning_rate = 0.002
 beta_1 = 0.0
 beta_2 = 0.99
 
@@ -26,6 +26,9 @@ normalize_latents = True
 concat_method = 'simple'  # 'conv' or 'simple'
 mbstd_in_each_layer = True
 
+# Use equalized learning rate
+use_elr = True
+
 # ================================== Network parameters ==================================
 # I think doing the <features> // 2 produces similar results for 64x64, but is *significantly* faster (rougly 2.5x)
 max_features = 512
@@ -44,7 +47,7 @@ mbstd_epsilon = 1e-7
 prog_update_freq = 5
 
 # Number of progress updates per random image shown
-updates_per_img = 10
+updates_per_img = 4
 
 # ================================== File/directory paths ==================================
 run_id = datetime.datetime.now().strftime("%Y%m%d-[%H-%M-%S]")
