@@ -3,10 +3,10 @@ import datetime
 
 # ================================== Training parameters ==================================
 # Resolution for generated images (must be a power of 2)
-target_res = 128
+target_res = 64
 
 # Adam parameters
-learning_rate = 0.002
+learning_rate = 0.001
 beta_1 = 0.0
 beta_2 = 0.99
 
@@ -24,9 +24,10 @@ normalize_latents = True
 
 # Beware: my current implementation of convolutional concat uses 1.5x more memory and is 2x slower
 concat_method = 'simple'  # 'conv' or 'simple'
-mbstd_in_each_layer = True
+mbstd_in_each_layer = False
 
-# Use equalized learning rate
+# Use equalized learning rate. If you disable this lower the learning rate by at least an order of magnitude or
+# else training diverges
 use_elr = True
 
 # ================================== Network parameters ==================================

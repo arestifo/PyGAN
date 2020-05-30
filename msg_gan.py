@@ -66,8 +66,10 @@ class MsgGan:
             tf.summary.text('critic', self.critic.to_json(), step=0)
 
     # view multi-scale generator output
-    def view_imgs(self, imgs, show=False):
-        # Get first image in batch
+    def view_imgs(self, imgs, show=False, rows=4):
+        # Get `rows` batches
+        assert rows <= gp.batch_size, 'Number of rows cannot exceed batch size'
+
         imgs = [img[0] for img in imgs]
         fig, axs = plt.subplots(ncols=self.target_res)
         assert len(imgs) == self.target_res
@@ -82,6 +84,7 @@ class MsgGan:
         plt.cla()
         plt.close(fig)
 
+    # TODO: Implement exponential moving averages for the generator weights
     def train(self):
         epochs = 5
 
@@ -93,11 +96,8 @@ class MsgGan:
                     # Get a new batch of real images and create new generate input
                     real_batch = dataset.next()
                     latent_input = util.generate_latents()
-                    critic_loss = self.train_critic(real_batch, latent_input)
 
-                    # Resample input for generator training
-                    # real_batch = dataset.next()
-                    # latent_input = util.generate_latents()
+                    critic_loss = self.train_critic(real_batch, latent_input)
                     generator_loss = self.train_generator(real_batch, latent_input)
 
                     epoch_seen += gp.batch_size
@@ -164,8 +164,11 @@ class MsgGan:
         input_layer = gl.input_layer(shape=(gp.latent_dim,))
 
         # Input block
-        gen = gl.conv2d_transpose(input_layer, util.nf(0), kernel=4, padding='latent')
+        # gen = gl.conv2d_transpose(input_layer, util.nf(0), kernel=4, padding='latent')
+        gen = gl.dense(input_layer, 4 * 4 * util.nf(0))
+        gen = gl.reshape(gen, shape=(4, 4, util.nf(0)))
         gen = gl.leaky_relu(gen)
+        gen = gl.normalize(gen, method='pixel_norm')
 
         gen = gl.conv2d(gen, util.nf(0), kernel=3)
         gen = gl.leaky_relu(gen)
@@ -230,11 +233,17 @@ class MsgGan:
         crt = gl.conv2d(crt, util.nf(0), kernel=3)
         crt = gl.leaky_relu(crt)
 
-        crt = gl.conv2d(crt, util.nf(0), kernel=4)
+        # crt = gl.conv2d(crt, util.nf(0), kernel=4)
+        # crt = gl.leaky_relu(crt)
+        #
+        # crt = gl.flatten(crt)
+        # crt = gl.dense(crt, 1, dtype='float32')
+        crt = gl.flatten(crt)
+        crt = gl.dense(crt, util.nf(0))
         crt = gl.leaky_relu(crt)
 
-        crt = gl.flatten(crt)
         crt = gl.dense(crt, 1, dtype='float32')
+        crt = gl.leaky_relu(crt)
 
         # Finalized model
         return Model(inputs=inputs, outputs=crt)
