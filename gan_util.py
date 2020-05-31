@@ -43,17 +43,8 @@ def load_celeba(res):
 
 
 # make directory if it doesn't exist
-def init_log_dir():
-    log_dir = gp.tensorboard_dir
-    pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
-    return log_dir
-
-
-# create generator sample output directory
-def init_imgs_dir():
-    log_dir = gp.sample_output_dir
-    pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
-    return log_dir
+def init_directory(dir_):
+    pathlib.Path(dir_).mkdir(parents=True, exist_ok=True)
 
 
 # generate a batch of latent vectors

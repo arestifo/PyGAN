@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import progressbar as pb
 import os
+import itertools
 from tensorflow.keras.models import Model
 from tensorflow.keras import optimizers
 
@@ -12,10 +13,9 @@ import gan_params as gp
 
 tf.config.experimental.set_memory_growth(tf.config.list_physical_devices('GPU')[0], gp.gpu_grow_memory)
 tf.config.experimental_run_functions_eagerly(gp.run_functions_eagerly)
+plt.rcParams["figure.figsize"] = gp.figure_size
 
 
-# Uses reference code from
-# https://github.com/eriklindernoren/Keras-GAN/blob/master/wgan_gp/wgan_gp.py
 class MsgGan:
     def __init__(self):
         assert np.ceil(np.log2(gp.target_res)) == \
@@ -37,17 +37,22 @@ class MsgGan:
         # Seed for keeping track of progress
         self.seed = util.generate_latents()
 
-        # Set up log directory
-        self.log_dir = util.init_log_dir()
-        self.imgs_dir = util.init_imgs_dir()
+        # Set up directories
+        util.init_directory(gp.tensorboard_dir)  # log dir
+        util.init_directory(gp.sample_output_dir)  # generated sample dir
+        util.init_directory(gp.model_dir)  # model architecture plot dir
+        util.init_directory(gp.model_weight_dir)  # saved model weights dir
 
         # Set up TensorBoard logging
-        self.log_writer = tf.summary.create_file_writer(self.log_dir)
+        self.log_writer = tf.summary.create_file_writer(gp.tensorboard_dir)
         self.total_seen = 0  # keep track of total number of images seen
         self.total_batches = 0  # keep track of total batches sen
 
         # Write model summaries to TensorBoard for debugging
         self.write_model_summaries()
+
+        # Create CheckpointManager to save model state during training
+        self.checkpoint_mgr = self.create_checkpoint_manager()
 
         # Progress bar format
         self.pb_widgets = [
@@ -56,31 +61,39 @@ class MsgGan:
             pb.FileTransferSpeed(unit='img', prefixes=['', 'k', 'm']), '\t', pb.ETA()
         ]
 
-    def random_image(self):
-        r_img = self.generator(self.seed)
-        self.view_imgs(r_img)
-
     def write_model_summaries(self):
         with self.log_writer.as_default():
             tf.summary.text('generator', self.generator.to_json(), step=0)
             tf.summary.text('critic', self.critic.to_json(), step=0)
 
+    def create_checkpoint_manager(self):
+        checkpoint = tf.train.Checkpoint(generator=self.generator, critic=self.critic,
+                                         gen_opt=self.gen_opt, crt_opt=self.crt_opt)
+        return tf.train.CheckpointManager(checkpoint, directory=gp.model_weight_dir, max_to_keep=3)
+
+    def random_image(self):
+        r_img = self.generator(self.seed)
+        self.view_imgs(r_img)
+
     # view multi-scale generator output
-    def view_imgs(self, imgs, show=False, rows=4):
-        # Get `rows` batches
+    def view_imgs(self, images, show=False, rows=4):
+        # print(np.shape(images))
         assert rows <= gp.batch_size, 'Number of rows cannot exceed batch size'
 
-        imgs = [img[0] for img in imgs]
-        fig, axs = plt.subplots(ncols=self.target_res)
-        assert len(imgs) == self.target_res
+        fig, axs = plt.subplots(nrows=rows, ncols=self.target_res)
 
-        for subplot, img in enumerate(imgs):
-            img = (img - np.min(img)) / np.ptp(img)  # Scale images to [0, 1]
-            axs[subplot].axis('off')
-            axs[subplot].imshow(img)
-        plt.savefig(os.path.join(self.imgs_dir, str(self.total_seen) + '.png'))
+        image_indices = itertools.product(range(self.target_res), range(rows))
+        for row, col in image_indices:
+            image = images[row][col]
+            image = (image - np.min(image)) / np.ptp(image)  # Scale images to [0, 1]
+            axs[col, row].axis('off')
+            axs[col, row].imshow(image)
+
+        plt.savefig(os.path.join(gp.sample_output_dir, str(self.total_seen) + '.png'))
         if show:
             plt.show()
+
+        # Clean up
         plt.cla()
         plt.close(fig)
 
@@ -117,6 +130,7 @@ class MsgGan:
                         self.random_image()
 
                 # Save model weights after each epoch
+                self.checkpoint_mgr.save()
 
     # Hypothesis: getting the grads of the MEAN hinge loss loses batch data and destabilizes the training process
     # Relativistic Hinge loss (RaHinge)

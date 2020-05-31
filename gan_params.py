@@ -3,7 +3,7 @@ import datetime
 
 # ================================== Training parameters ==================================
 # Resolution for generated images (must be a power of 2)
-target_res = 64
+target_res = 128
 
 # Adam parameters
 learning_rate = 0.001
@@ -48,12 +48,12 @@ mbstd_epsilon = 1e-7
 prog_update_freq = 5
 
 # Number of progress updates per random image shown
-updates_per_img = 4
+updates_per_img = 6
 
 # ================================== File/directory paths ==================================
 run_id = datetime.datetime.now().strftime("%Y%m%d-[%H-%M-%S]")
 model_dir = 'models/plots/' + run_id + '/'
-model_weight_dir = 'model/weights/' + run_id + '/'
+model_weight_dir = 'models/weights/' + run_id + '/'
 tensorboard_dir = 'logs/' + run_id + '/'
 sample_output_dir = 'epoch_images/' + run_id + '/'
 celeba_dir = 'celeba/'
@@ -70,3 +70,6 @@ run_functions_eagerly = False
 
 # If True, TensorFlow will allocate GPU memory as it needs it instead of all the GPU memory at once
 gpu_grow_memory = True
+
+# ================================== Other ==================================
+figure_size = (12.8, 9.6)  # dpi=100
