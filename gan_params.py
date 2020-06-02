@@ -3,7 +3,7 @@ import datetime
 
 # ================================== Training parameters ==================================
 # Resolution for generated images (must be a power of 2)
-target_res = 128
+target_res = 512
 
 # Adam parameters
 learning_rate = 0.001
@@ -12,7 +12,7 @@ beta_2 = 0.99
 
 # Training parameters
 images_per_epoch = 600000
-batch_size = 16
+batch_size = 4
 
 # Use mixed precision performance. Your GPU must have compute capability >7.0 to benefit from this, beyond
 # some small memory and bandwidth gains
@@ -48,12 +48,12 @@ mbstd_epsilon = 1e-7
 prog_update_freq = 5
 
 # Number of progress updates per random image shown
-updates_per_img = 6
+updates_per_img = 10
 
 # ================================== File/directory paths ==================================
 run_id = datetime.datetime.now().strftime("%Y%m%d-[%H-%M-%S]")
 model_dir = 'models/plots/' + run_id + '/'
-model_weight_dir = 'models/weights/' + run_id + '/'
+model_weight_dir = 'models/weights/'
 tensorboard_dir = 'logs/' + run_id + '/'
 sample_output_dir = 'epoch_images/' + run_id + '/'
 celeba_dir = 'celeba/'
@@ -72,4 +72,4 @@ run_functions_eagerly = False
 gpu_grow_memory = True
 
 # ================================== Other ==================================
-figure_size = (12.8, 9.6)  # dpi=100
+figure_size = (19.2, 10.8)  # dpi=100

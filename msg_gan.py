@@ -71,9 +71,9 @@ class MsgGan:
                                          gen_opt=self.gen_opt, crt_opt=self.crt_opt)
         return tf.train.CheckpointManager(checkpoint, directory=gp.model_weight_dir, max_to_keep=3)
 
-    def random_image(self):
+    def random_image(self, show=False):
         r_img = self.generator(self.seed)
-        self.view_imgs(r_img)
+        self.view_imgs(r_img, show=show)
 
     # view multi-scale generator output
     def view_imgs(self, images, show=False, rows=4):
@@ -89,17 +89,18 @@ class MsgGan:
             axs[col, row].axis('off')
             axs[col, row].imshow(image)
 
-        plt.savefig(os.path.join(gp.sample_output_dir, str(self.total_seen) + '.png'))
         if show:
             plt.show()
+        else:
+            plt.savefig(os.path.join(gp.sample_output_dir, str(self.total_seen) + '.png'))
 
-        # Clean up
-        plt.cla()
+        # Clean up to avoid memory leaks
+        plt.cla()  # close axis
         plt.close(fig)
 
     # TODO: Implement exponential moving averages for the generator weights
     def train(self):
-        epochs = 5
+        epochs = 15
 
         dataset = util.load_celeba(self.target_res)
         for epoch in range(epochs):
@@ -178,7 +179,6 @@ class MsgGan:
         input_layer = gl.input_layer(shape=(gp.latent_dim,))
 
         # Input block
-        # gen = gl.conv2d_transpose(input_layer, util.nf(0), kernel=4, padding='latent')
         gen = gl.dense(input_layer, 4 * 4 * util.nf(0))
         gen = gl.reshape(gen, shape=(4, 4, util.nf(0)))
         gen = gl.leaky_relu(gen)
@@ -247,17 +247,11 @@ class MsgGan:
         crt = gl.conv2d(crt, util.nf(0), kernel=3)
         crt = gl.leaky_relu(crt)
 
-        # crt = gl.conv2d(crt, util.nf(0), kernel=4)
-        # crt = gl.leaky_relu(crt)
-        #
-        # crt = gl.flatten(crt)
-        # crt = gl.dense(crt, 1, dtype='float32')
         crt = gl.flatten(crt)
         crt = gl.dense(crt, util.nf(0))
         crt = gl.leaky_relu(crt)
 
         crt = gl.dense(crt, 1, dtype='float32')
-        crt = gl.leaky_relu(crt)
 
         # Finalized model
         return Model(inputs=inputs, outputs=crt)
