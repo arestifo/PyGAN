@@ -72,4 +72,4 @@ run_functions_eagerly = False
 gpu_grow_memory = True
 
 # ================================== Other ==================================
-figure_size = (19.2, 10.8)  # dpi=100
+figure_size = (19.2, 10.8)  # dpi=100, 1920x1080 TODO: Make figures dynamically sized

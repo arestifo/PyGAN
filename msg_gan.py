@@ -68,11 +68,12 @@ class MsgGan:
 
     def create_checkpoint_manager(self):
         checkpoint = tf.train.Checkpoint(generator=self.generator, critic=self.critic,
-                                         gen_opt=self.gen_opt, crt_opt=self.crt_opt)
+                                         gen_opt=self.gen_opt, crt_opt=self.crt_opt,
+                                         seed=self.seed, total_seen=self.total_seen, total_batches=self.total_batches)
         return tf.train.CheckpointManager(checkpoint, directory=gp.model_weight_dir, max_to_keep=3)
 
-    def random_image(self, show=False):
-        r_img = self.generator(self.seed)
+    def random_image(self, show=True):
+        r_img = self.generator(util.generate_latents())
         self.view_imgs(r_img, show=show)
 
     # view multi-scale generator output
@@ -99,15 +100,16 @@ class MsgGan:
         plt.close(fig)
 
     # TODO: Implement exponential moving averages for the generator weights
+    # TODO: Implement multi-GPU support
     def train(self):
-        epochs = 15
+        epochs = 10
 
         dataset = util.load_celeba(self.target_res)
         for epoch in range(epochs):
             epoch_seen = 0
             with pb.ProgressBar(widgets=self.pb_widgets, max_value=gp.images_per_epoch) as progress:
                 while epoch_seen < gp.images_per_epoch:
-                    # Get a new batch of real images and create new generate input
+                    # Get a new batch of real images and create new generator input
                     real_batch = dataset.next()
                     latent_input = util.generate_latents()
 
@@ -123,12 +125,14 @@ class MsgGan:
                         tf.summary.scalar('g_loss', generator_loss, step=self.total_seen)
                         tf.summary.scalar('c_loss', critic_loss, step=self.total_seen)
 
+                    # TODO: Implement with callbacks
                     if util.time_to_update(epoch_seen):
                         progress.update(epoch_seen, batches=self.total_batches,
                                         g_loss=generator_loss, c_loss=critic_loss)
 
                     if util.time_for_img(epoch_seen):
-                        self.random_image()
+                        sample_imgs = self.generator(self.seed)
+                        self.view_imgs(sample_imgs)
 
                 # Save model weights after each epoch
                 self.checkpoint_mgr.save()
@@ -170,9 +174,11 @@ class MsgGan:
 
         scaled_crt_grads = crt_tape.gradient(scaled_loss, self.critic.trainable_variables)
         crt_grads = self.crt_opt.get_unscaled_gradients(scaled_crt_grads)
+
         self.crt_opt.apply_gradients(zip(crt_grads, self.critic.trainable_variables))
         return loss
 
+    # TODO: Implement fused upscale & downscaled
     def build_generator(self):
         # Keep track of multi-scale generator outputs to feed to critic
         outputs = []
@@ -260,4 +266,3 @@ class MsgGan:
 msg = MsgGan()
 util.pm(msg.generator, 'g' + str(msg.generator.output_shape[0][1]))
 util.pm(msg.critic, 'c' + str(msg.critic.input_shape[0][1]))
-msg.train()
